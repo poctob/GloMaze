@@ -5,35 +5,31 @@
  ****
  Version history:
  
+ 11 Feburary 2014 Alex P. adding display support, adding multiple tries.
  31 March 2013 - Alex P.  initial version
  */
- /*
-#include <Arial_black_16.h>
-#include <DMD.h>
-#include <SystemFont5x7.h>
-#include <Arial14.h>
-
+ 
 #include <SPI.h>        //SPI.h must be included as DMD is written by SPI (the IDE complains otherwise)
 
 #include <TimerOne.h>   //
+#include <DMD.h>
 #include "SystemFont5x7.h"
 #include "Arial_black_16.h"
 #include "Arial14.h"
 
 
+
 //Fire up the DMD library as dmd
 #define DISPLAYS_ACROSS 1
 #define DISPLAYS_DOWN 1
-DMD dmd(DISPLAYS_ACROSS, DISPLAYS_DOWN);
+#define DISPLAYS_BPP 1
+DMD dmd(DISPLAYS_ACROSS, DISPLAYS_DOWN, DISPLAYS_BPP);
 
-int c_message=0;
-int num_messages=3;
+//Maximum number of tries
+#define MAX_TRIES 5
 
-String marq_messages[]={"Glozone",
-"GloMaze Coming Soon...",
-"Meow"
-};*/
-
+//Maximum score
+#define MAX_SCORE 1000
 
 #define LINE_MAX 8
 /************************************************************************************
@@ -101,15 +97,37 @@ volatile boolean running=false;
 //indicator for testing purposes
 int led = 13;
 
+/************************************************************************************
+Try counter
+************************************************************************************/
+int current_try = 1;
+
+/************************************************************************************
+Global score value
+************************************************************************************/
+int current_score = 0;
+
+/************************************************************************************
+timing values
+************************************************************************************/
+unsigned long target_time = 0;
+
+
 /*--------------------------------------------------------------------------------------
   Interrupt handler for Timer1 (TimerOne) driven DMD refresh scanning, this gets
   called at the period set in Timer1.initialize();
 --------------------------------------------------------------------------------------*/
-/*void ScanDMD()
+void ScanDMD()
 { 
-  dmd.scanDisplayBySPI();
-}*/
-
+  if(millis()<target_time)
+  {
+    dmd.scanDisplayBySPI();
+  }
+  else
+  {
+    Timer1.detachInterrupt();
+  }
+}
 // the setup routine runs once when you press reset:
 void setup() {          
   // initialize and set the contrast to 0x18
@@ -139,7 +157,7 @@ void setup() {
   digitalWrite(beacon_power, HIGH);
   digitalWrite(siren_power, HIGH);
 
-  //Attached an interrupt to power button. 
+  //Attach an interrupt to power button. 
   digitalWrite(power_button, LOW); 
   pinMode(medium_button, LOW); 
   pinMode(hard_button, LOW); 
@@ -151,23 +169,23 @@ void setup() {
   int_volt=analogRead(A0);
   print_debug(" Complete!");
   print_debug(" Waiting for input!");
-  
-  //initialize TimerOne's interrupt/CPU usage used to scan and refresh the display
-  /*Timer1.initialize( 5000 );           //period in microseconds to call ScanDMD. Anything longer than 5000 (5ms) and you can see flicker.
-  Timer1.attachInterrupt( ScanDMD );   //attach the Timer1 interrupt to ScanDMD which goes to dmd.scanDisplayBySPI()
 
   //clear/init the DMD pixels held in RAM
   dmd.clearScreen( true );   //true is normal (all pixels off), false is negative (all pixels on
-  */
+  
 }
 
 // the loop routine runs over and over again forever:
 void loop() {
+  target_time = millis()+7000;
   
-  while(!running)
-  {
-     delay(500);
-  }
+  Timer1.initialize( 5000 );           //period in microseconds to call ScanDMD. Anything longer than 5000 (5ms) and you can see flicker.
+  Timer1.attachInterrupt( ScanDMD );   //attach the Timer1 interrupt to ScanDMD which goes to dmd.scanDisplayBySPI()
+
+  printMarquee("Your Score: "+current_score,5000);
+  
+  current_score = 0;
+  current_try = 1;
   level_select();    
 }
 
@@ -177,7 +195,6 @@ void loop() {
 */
 void level_select()
 {
-    print_debug(" Start pressed!");
     print_debug(" Waiting for level!");
     boolean selected=false;
     digitalWrite(led, HIGH);
@@ -227,9 +244,18 @@ void protect()
   {
     current_value=analogRead(volt_sensor_1)+analogRead(volt_sensor_2)+analogRead(volt_sensor_3);
     if(current_value < int_volt/2)
-    {
+    {       
        print_debug("Alarm!");
-       alarm();       
+       
+       if(current_try < MAX_TRIES)
+       {
+           flicker(current_try, 1000);
+           current_try++;
+       }
+       else
+       {
+         alarm();       
+       }
     }
   }
   if(digitalRead(disable_button)==HIGH)
@@ -237,6 +263,19 @@ void protect()
      print_debug("Stop Pressed!");
   }
   stop_run();
+}
+
+/**
+* Flickers the lasers
+*/
+void flicker( int p_times, int p_delay)
+{
+    for(int i=0; i<p_times;i++)
+    {
+         digitalWrite(level1_power, HIGH);
+         delay(p_delay);
+         digitalWrite(level1_power, LOW);
+    }
 }
 
 /**
@@ -267,7 +306,7 @@ void sound_ready()
 */
 void start_game()
 {
-  running=!running;
+  running=true;
 }
 
 /**
@@ -297,16 +336,10 @@ void alarm()
   delay(3000);
   digitalWrite(siren_power, HIGH);
   digitalWrite(beacon_power, HIGH);
+  
+  current_score = 1000 * current_try;
+  
 }
-
-/*void displayClock()
-{ 
-       
-       c_message=c_message<num_messages?c_message:0;
-       printMarquee(marq_messages[c_message],30);   
-       c_message++;
-}
-
 
 void printMarquee(String message, int in_delay)
 {
@@ -315,7 +348,7 @@ void printMarquee(String message, int in_delay)
    
    char buf[message.length()+1];
    message.toCharArray(buf, message.length()+1);
-   dmd.drawMarquee(buf,message.length()+1,(32*DISPLAYS_ACROSS)-1,0);
+   dmd.drawMarquee(buf,message.length()+1,(32*DISPLAYS_ACROSS)-1,0,WHITE,BLACK);
    long start=millis();
    long timer=start;
    boolean ret=false;
@@ -325,4 +358,4 @@ void printMarquee(String message, int in_delay)
        timer=millis();
      }
    }
-}*/
+}

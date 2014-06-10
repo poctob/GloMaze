@@ -7,7 +7,7 @@
  
  31 March 2013 - Alex P.  initial version
  */
- /*
+
 #include <Arial_black_16.h>
 #include <DMD.h>
 #include <SystemFont5x7.h>
@@ -26,16 +26,20 @@
 #define DISPLAYS_DOWN 1
 DMD dmd(DISPLAYS_ACROSS, DISPLAYS_DOWN);
 
-int c_message=0;
-int num_messages=3;
-
-String marq_messages[]={"Glozone",
-"GloMaze Coming Soon...",
-"Meow"
-};*/
-
-
+//Maximum score
+#define MAX_SCORE 1000
 #define LINE_MAX 8
+
+/**
+  multipliers
+*/
+#define L1_MULTIPLIER 0.5
+#define L2_MULTIPLIER 0.25
+#define L3_MULTIPLIER 0.25
+
+//Trip delay
+#define TRIP_DELAY 0
+
 /************************************************************************************
 LCD driver pins 30-34
 ************************************************************************************/
@@ -92,23 +96,43 @@ int siren_power=41;
 //pin 42 beacon
 int beacon_power=42;
 
-//initial voltage
-int int_volt=0;
-
 //flag to determine if the game is running
 volatile boolean running=false;
 
 //indicator for testing purposes
 int led = 13;
 
+//Current level
+int current_level=0;
+
+//Possible levels
+enum Level
+{
+  NONE,
+  ONE,
+  TWO,
+  THREE,
+  MAX
+};
+
+/************************************************************************************
+Global score value
+************************************************************************************/
+int current_score = MAX_SCORE;
+
+/************************************************************************************
+timing values
+************************************************************************************/
+unsigned long target_time = 0;
+
 /*--------------------------------------------------------------------------------------
   Interrupt handler for Timer1 (TimerOne) driven DMD refresh scanning, this gets
   called at the period set in Timer1.initialize();
 --------------------------------------------------------------------------------------*/
-/*void ScanDMD()
+void ScanDMD()
 { 
   dmd.scanDisplayBySPI();
-}*/
+}
 
 // the setup routine runs once when you press reset:
 void setup() {          
@@ -146,19 +170,12 @@ void setup() {
   pinMode(disable_button, LOW); 
   digitalWrite(led, LOW); 
   attachInterrupt(2, start_game, RISING);     
-  
-  //take initial voltage reading
-  int_volt=analogRead(A0);
+
   print_debug(" Complete!");
   print_debug(" Waiting for input!");
+  Timer1.initialize( 5000 );           //period in microseconds to call ScanDMD. Anything longer than 5000 (5ms) and you can see flicker.
+ 
   
-  //initialize TimerOne's interrupt/CPU usage used to scan and refresh the display
-  /*Timer1.initialize( 5000 );           //period in microseconds to call ScanDMD. Anything longer than 5000 (5ms) and you can see flicker.
-  Timer1.attachInterrupt( ScanDMD );   //attach the Timer1 interrupt to ScanDMD which goes to dmd.scanDisplayBySPI()
-
-  //clear/init the DMD pixels held in RAM
-  dmd.clearScreen( true );   //true is normal (all pixels off), false is negative (all pixels on
-  */
 }
 
 // the loop routine runs over and over again forever:
@@ -168,6 +185,14 @@ void loop() {
   {
      delay(500);
   }
+  
+  
+  delay(1000);
+  String score = String(current_score);
+  Timer1.attachInterrupt( ScanDMD ); 
+  printMarquee("Intruder Detected! Starting Score: "+score,30);
+  Timer1.detachInterrupt();
+  current_score = MAX_SCORE;
   level_select();    
 }
 
@@ -177,66 +202,155 @@ void loop() {
 */
 void level_select()
 {
-    print_debug(" Start pressed!");
+    //print_debug(" Start pressed!");
     print_debug(" Waiting for level!");
     boolean selected=false;
     digitalWrite(led, HIGH);
     while (!selected)
     {
+      //Press easy button and disable button at the same time for 
+      //test mode.
        if(digitalRead(easy_button))
        {
-         print_debug(" Easy pressed!");
-         digitalWrite(level1_power, LOW);         
+         if(digitalRead(disable_button)==HIGH)
+         {
+           runTest();
+           return;
+         }
+         print_debug(" Easy pressed!");        
+         selected=true;   
+         current_level=ONE;
+         
        }
        else if(digitalRead(medium_button))
        {
-         print_debug(" Medium pressed!");
-         digitalWrite(level1_power, LOW);
-         digitalWrite(level2_power, LOW);
+         print_debug(" Medium pressed!");       
+         selected=true;
+         current_level=TWO;
        }
        else if(digitalRead(hard_button))
        {
          print_debug(" Hard pressed!");
-         digitalWrite(level1_power, LOW);
-         digitalWrite(level2_power, LOW);
-         digitalWrite(level3_power, LOW);
+         selected=true;
+         current_level=THREE;
        }
-       digitalWrite(led, LOW);
-       selected=true;
-       protect();
+       
+ 
     }
+       
+       processPower();
+       digitalWrite(led, LOW);       
+       protect();
+       //attachInterrupt(2, start_game, RISING); 
 }
 
+/**
+* Turns the lasers on based on the currently selected level.
+*/
+void processPower()
+{
+  switch (current_level)
+  {
+    case ONE:
+        digitalWrite(level1_power, LOW); 
+        break; 
+    case TWO:
+       digitalWrite(level1_power, LOW);
+       digitalWrite(level2_power, LOW);
+       break;
+    case THREE:
+       digitalWrite(level1_power, LOW);
+       digitalWrite(level2_power, LOW);
+       digitalWrite(level3_power, LOW);
+       break;
+    default:
+      break;    
+  }
+}
+
+
+/**
+* Checks if sensor has been tripped.
+*/
+boolean isTripped(int initial1, int initial2, int initial3)
+{
+  float current_value1=0;
+  float current_value2=0;
+  float current_value3=0;
+  boolean return_value=false;
+  
+   switch (current_level)
+  {
+    case ONE:
+        current_value1=analogRead(volt_sensor_1);
+        return_value=(current_value1 < initial1*L1_MULTIPLIER);
+        break; 
+    case TWO:
+        current_value1=analogRead(volt_sensor_1);
+        current_value2=analogRead(volt_sensor_2);
+        return_value=(current_value1 < initial1*L1_MULTIPLIER) || 
+        (current_value2 < initial2*L2_MULTIPLIER);
+       break;
+    case THREE:
+        current_value1=analogRead(volt_sensor_1);
+        current_value2=analogRead(volt_sensor_2);
+        current_value3=analogRead(volt_sensor_3);
+        return_value=(current_value1 < initial1*L1_MULTIPLIER) || 
+        (current_value2 < initial2*L2_MULTIPLIER) ||
+        (current_value3 < initial3*L2_MULTIPLIER);
+       break;
+    default:
+      break;    
+  }
+  return return_value;
+}
 /**
 *  Initializes and monitors the sensors
 */
 void protect()
-{
-  sound_ready();
-  int_volt=analogRead(volt_sensor_1)+analogRead(volt_sensor_2)+analogRead(volt_sensor_3);
-  int current_value=0;
- 
+{ 
+  delay(500);
+  int int_volt1=analogRead(volt_sensor_1);
+  int int_volt2=analogRead(volt_sensor_2);
+  int int_volt3=analogRead(volt_sensor_3);
+   sound_ready();
+  
   char sensorvalue[4];
   char strval[14];
-  strcpy(strval," Voltage: "); 
-  itoa(int_volt, sensorvalue, 10);
+  strcpy(strval," Voltage1: "); 
+  itoa(int_volt1, sensorvalue, 10);
   print_debug(strcat(strval, sensorvalue)); 
   
-  //check of the value is half of the initial, if it is, sound alarm.
+  strcpy(strval," Voltage2: "); 
+  itoa(int_volt2, sensorvalue, 10);
+  print_debug(strcat(strval, sensorvalue)); 
+  
+  strcpy(strval," Voltage3: "); 
+  itoa(int_volt3, sensorvalue, 10);
+  print_debug(strcat(strval, sensorvalue)); 
+  running=true;
+  
+
   while(running && digitalRead(disable_button)==LOW)
   {
-    current_value=analogRead(volt_sensor_1)+analogRead(volt_sensor_2)+analogRead(volt_sensor_3);
-    if(current_value < int_volt/2)
-    {
-       print_debug("Alarm!");
-       alarm();       
+    if(isTripped(int_volt1,int_volt2,int_volt3))
+    {       
+       delay(TRIP_DELAY);        
+       if(isTripped(int_volt1,int_volt2,int_volt3))
+       {
+          print_debug("Alarm!");
+          alarm();    
+          //running=false; 
+            
+       }
     }
   }
   if(digitalRead(disable_button)==HIGH)
   {
      print_debug("Stop Pressed!");
+     stop_run();
   }
-  stop_run();
+  
 }
 
 /**
@@ -248,7 +362,13 @@ void stop_run()
     digitalWrite(level1_power, HIGH);
     digitalWrite(level2_power, HIGH);
     digitalWrite(level3_power, HIGH);
-    running=false;
+   // running=false;
+   String score = String(current_score);
+  Timer1.attachInterrupt( ScanDMD ); 
+  printMarquee("Your Score: "+score,30);
+  Timer1.detachInterrupt();
+  current_score = MAX_SCORE;
+    
 }
 
 /**
@@ -267,7 +387,12 @@ void sound_ready()
 */
 void start_game()
 {
-  running=!running;
+  print_debug("Start interrupt...");
+  if(!running)
+  {
+    running=true;
+  }
+  detachInterrupt(2); 
 }
 
 /**
@@ -291,20 +416,57 @@ void print_debug(char * message)
 //sound alarm
 void alarm()
 {
-  stop_run();
-  digitalWrite(siren_power, LOW);
+  current_score-=50;
+  //stop_run();
+  //digitalWrite(siren_power, LOW);
   digitalWrite(beacon_power, LOW);
-  delay(3000);
+  delay(1000);
   digitalWrite(siren_power, HIGH);
   digitalWrite(beacon_power, HIGH);
+  
 }
 
-/*void displayClock()
-{ 
+/**
+*  Diagnostics mode.  Turns on all lasers and
+*  prints out sensor readings on the screen.
+*/
+void runTest()
+{
+  digitalWrite(level1_power, LOW);
+  digitalWrite(level2_power, LOW);
+  digitalWrite(level3_power, LOW);
+  
+  print_debug("Test Mode");
+  delay(1000);
+  running=false;
+  
+  while(digitalRead(disable_button)==LOW)
+  {
        
-       c_message=c_message<num_messages?c_message:0;
-       printMarquee(marq_messages[c_message],30);   
-       c_message++;
+      int int_volt1=analogRead(volt_sensor_1);
+      int int_volt2=analogRead(volt_sensor_2);
+      int int_volt3=analogRead(volt_sensor_3);
+      char sensorvalue[4];
+      char strval[14];
+      strcpy(strval," Voltage1: "); 
+      itoa(int_volt1, sensorvalue, 10);
+      print_debug(strcat(strval, sensorvalue)); 
+      
+      strcpy(strval," Voltage2: "); 
+      itoa(int_volt2, sensorvalue, 10);
+      print_debug(strcat(strval, sensorvalue)); 
+      
+      strcpy(strval," Voltage3: "); 
+      itoa(int_volt3, sensorvalue, 10);
+      print_debug(strcat(strval, sensorvalue)); 
+      delay(1000);
+  }
+  digitalWrite(level1_power, HIGH);
+  digitalWrite(level2_power, HIGH);
+  digitalWrite(level3_power, HIGH);
+  attachInterrupt(2, start_game, RISING); 
+    
+    
 }
 
 
@@ -325,4 +487,4 @@ void printMarquee(String message, int in_delay)
        timer=millis();
      }
    }
-}*/
+}
